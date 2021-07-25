@@ -42,7 +42,7 @@
 # extract the required DMA and alternate function tables.
 
 # MCU class and specific type
-MCU STM32F4xx STM32F427xx
+MCU STM32F4xx STM32F407xx
 
 # We set a specific HAL_BOARD_SUBTYPE, allowing for custom config in
 # drivers. For this to be used the subtype needs to be added to
@@ -66,7 +66,7 @@ APJ_BOARD_ID 9
 # 24000000 or 8000000.
 
 # crystal frequency
-OSCILLATOR_HZ 24000000
+OSCILLATOR_HZ 8000000
 
 # On some boards you will need to also set the various PLL values. See
 # the defaults in common/mcuconf.h, and use the define mechanism
@@ -88,7 +88,7 @@ STM32_ST_USE_TIMER 5
 # Now the size of flash in kilobytes, for creating the ld.script.
 
 # flash size
-FLASH_SIZE_KB 2048
+FLASH_SIZE_KB 1024
 
 # Now define which UART is used for printf(). We rarely use printf()
 # in ChibiOS, so this is really only for debugging very early startup

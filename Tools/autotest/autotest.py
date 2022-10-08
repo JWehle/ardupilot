@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-APM automatic test suite.
+ArduPilot automatic test suite.
 
 Andrew Tridgell, October 2011
 
@@ -9,6 +9,7 @@ Andrew Tridgell, October 2011
 from __future__ import print_function
 import atexit
 import fnmatch
+import copy
 import glob
 import optparse
 import os
@@ -29,6 +30,7 @@ import antennatracker
 import quadplane
 import balancebot
 import sailboat
+import helicopter
 
 import examples
 from pysim import util
@@ -38,6 +40,8 @@ from pymavlink.generator import mavtemplate
 from common import Test
 
 tester = None
+
+build_opts = None
 
 
 def buildlogs_dirpath():
@@ -116,9 +120,16 @@ def build_binaries():
 
     # copy the script (and various libraries used by the script) as it
     # changes git branch, which can change the script while running
-    for thing in "build_binaries.py", "generate_manifest.py", "gen_stable.py", "build_binaries_history.py":
+    for thing in [
+            "board_list.py",
+            "build_binaries_history.py",
+            "build_binaries.py",
+            "build_sizes/build_sizes.py",
+            "generate_manifest.py",
+            "gen_stable.py",
+    ]:
         orig = util.reltopdir('Tools/scripts/%s' % thing)
-        copy = util.reltopdir('./%s' % thing)
+        copy = util.reltopdir('./%s' % os.path.basename(thing))
         shutil.copy2(orig, copy)
 
     if util.run_cmd("./build_binaries.py", directory=util.reltopdir('.')) != 0:
@@ -143,7 +154,7 @@ def build_examples(**kwargs):
 
 def build_unit_tests(**kwargs):
     """Build tests."""
-    for target in ['linux']:
+    for target in ['linux', 'sitl']:
         print("Running build.unit_tests for %s" % target)
         try:
             util.build_tests(target, **kwargs)
@@ -163,20 +174,22 @@ def run_unit_test(test):
 
 def run_unit_tests():
     """Run all unit tests files."""
-    binary_dir = util.reltopdir(os.path.join('build',
-                                             'linux',
-                                             'tests',
-                                             ))
-    tests = glob.glob("%s/*" % binary_dir)
     success = True
     fail_list = []
-    for test in tests:
-        try:
-            run_unit_test(test)
-        except subprocess.CalledProcessError:
-            print("Exception running (%s)" % test)
-            fail_list.append(os.path.basename(test))
-            success = False
+    for target in ['linux', 'sitl']:
+        binary_dir = util.reltopdir(os.path.join('build',
+                                                 target,
+                                                 'tests',
+                                                 ))
+        tests = glob.glob("%s/*" % binary_dir)
+        for test in tests:
+            try:
+                run_unit_test(test)
+            except subprocess.CalledProcessError:
+                print("Exception running (%s)" % test)
+                fail_list.append(target + '/' + os.path.basename(test))
+                success = False
+
     print("Failing tests:")
     for failure in fail_list:
         print("  %s" % failure)
@@ -214,7 +227,8 @@ def all_vehicles():
             'ArduCopter',
             'Rover',
             'AntennaTracker',
-            'ArduSub')
+            'ArduSub',
+            'Blimp')
 
 
 def build_parameters():
@@ -294,14 +308,12 @@ def should_run_step(step):
 
 __bin_names = {
     "Copter": "arducopter",
-    "CopterTests1": "arducopter",
     "CopterTests1a": "arducopter",
     "CopterTests1b": "arducopter",
     "CopterTests1c": "arducopter",
     "CopterTests1d": "arducopter",
     "CopterTests1e": "arducopter",
 
-    "CopterTests2": "arducopter",
     "CopterTests2a": "arducopter",
     "CopterTests2b": "arducopter",
 
@@ -311,6 +323,7 @@ __bin_names = {
     "Helicopter": "arducopter-heli",
     "QuadPlane": "arduplane",
     "Sub": "ardusub",
+    "Blimp": "blimp",
     "BalanceBot": "ardurover",
     "Sailboat": "ardurover",
     "SITLPeriphGPS": "sitl_periph_gp.AP_Periph",
@@ -369,13 +382,11 @@ def find_specific_test_to_run(step):
 
 tester_class_map = {
     "test.Copter": arducopter.AutoTestCopter,
-    "test.CopterTests1": arducopter.AutoTestCopterTests1,               # travis-ci
     "test.CopterTests1a": arducopter.AutoTestCopterTests1a, # 8m43s
     "test.CopterTests1b": arducopter.AutoTestCopterTests1b, # 8m5s
     "test.CopterTests1c": arducopter.AutoTestCopterTests1c, # 5m17s
     "test.CopterTests1d": arducopter.AutoTestCopterTests1d, # 8m20s
     "test.CopterTests1e": arducopter.AutoTestCopterTests1e, # 8m32s
-    "test.CopterTests2": arducopter.AutoTestCopterTests2,               # travis-ci
     "test.CopterTests2a": arducopter.AutoTestCopterTests2a, # 8m23s
     "test.CopterTests2b": arducopter.AutoTestCopterTests2b, # 8m18s
     "test.Plane": arduplane.AutoTestPlane,
@@ -383,7 +394,7 @@ tester_class_map = {
     "test.Rover": rover.AutoTestRover,
     "test.BalanceBot": balancebot.AutoTestBalanceBot,
     "test.Sailboat": sailboat.AutoTestSailboat,
-    "test.Helicopter": arducopter.AutoTestHeli,
+    "test.Helicopter": helicopter.AutoTestHelicopter,
     "test.Sub": ardusub.AutoTestSub,
     "test.Tracker": antennatracker.AutoTestTracker,
     "test.CAN": arducopter.AutoTestCAN,
@@ -407,11 +418,11 @@ def run_specific_test(step, *args, **kwargs):
 
     print("Got %s" % str(tester))
     for a in tester.tests():
-        if not hasattr(a, 'name'):
-            a = Test(a[0], a[1], a[2])
+        if type(a) != Test:
+            a = Test(a)
         print("Got %s" % (a.name))
         if a.name == test:
-            return tester.run_tests([a])
+            return (tester.autotest(tests=[a], allow_skips=False), tester)
     print("Failed to find test %s on %s" % (test, testname))
     sys.exit(1)
 
@@ -434,10 +445,15 @@ def run_step(step):
         "postype_single": opts.postype_single,
         "extra_configure_args": opts.waf_configure_args,
         "coverage": opts.coverage,
+        "sitl_32bit" : opts.sitl_32bit,
+        "ubsan" : opts.ubsan,
+        "ubsan_abort" : opts.ubsan_abort,
     }
 
     if opts.Werror:
         build_opts['extra_configure_args'].append("--Werror")
+
+    build_opts = build_opts
 
     vehicle_binary = None
     if step == 'build.Plane':
@@ -448,6 +464,9 @@ def run_step(step):
 
     if step == 'build.Copter':
         vehicle_binary = 'bin/arducopter'
+
+    if step == 'build.Blimp':
+        vehicle_binary = 'bin/blimp'
 
     if step == 'build.Tracker':
         vehicle_binary = 'bin/antennatracker'
@@ -501,6 +520,7 @@ def run_step(step):
         "viewerip": opts.viewerip,
         "use_map": opts.map,
         "valgrind": opts.valgrind,
+        "callgrind": opts.callgrind,
         "gdb": opts.gdb,
         "gdb_no_tui": opts.gdb_no_tui,
         "lldb": opts.lldb,
@@ -513,6 +533,8 @@ def run_step(step):
         "replay": opts.replay,
         "logs_dir": buildlogs_dirpath(),
         "sup_binaries": supplementary_binaries,
+        "reset_after_every_test": opts.reset_after_every_test,
+        "build_opts": copy.copy(build_opts),
     }
     if opts.speedup is not None:
         fly_opts["speedup"] = opts.speedup
@@ -763,8 +785,7 @@ def run_tests(steps):
             print("  %s:" % key)
             for testinstance in failed_testinstances[key]:
                 for failure in testinstance.fail_list:
-                    (desc, exception, debug_filename) = failure
-                    print("    %s (%s) (see %s)" % (desc, exception, debug_filename))
+                    print("  " + str(failure))
 
         print("FAILED %u tests: %s" % (len(failed), failed))
 
@@ -810,11 +831,9 @@ def list_subtests_for_vehicle(vehicle_type):
         subtests = tester.tests()
         sorted_list = []
         for subtest in subtests:
-            if type(subtest) is tuple:
-                (name, description, function) = subtest
-                sorted_list.append([name, description])
-            else:
-                sorted_list.append([subtest.name, subtest.description])
+            if type(subtest) != Test:
+                subtest = Test(subtest)
+            sorted_list.append([subtest.name, subtest.description])
         sorted_list.sort()
         for subtest in sorted_list:
             print("%s " % subtest[0], end='')
@@ -936,6 +955,21 @@ if __name__ == "__main__":
                            action="store_true",
                            dest="ekf_single",
                            help="force single precision EKF")
+    group_build.add_option("--sitl-32bit",
+                           default=False,
+                           action='store_true',
+                           dest="sitl_32bit",
+                           help="compile sitl using 32-bit")
+    group_build.add_option("", "--ubsan",
+                           default=False,
+                           action='store_true',
+                           dest="ubsan",
+                           help="compile sitl with undefined behaviour sanitiser")
+    group_build.add_option("", "--ubsan-abort",
+                           default=False,
+                           action='store_true',
+                           dest="ubsan_abort",
+                           help="compile sitl with undefined behaviour sanitiser and abort on error")
     parser.add_option_group(group_build)
 
     group_sim = optparse.OptionGroup(parser, "Simulation options")
@@ -947,6 +981,10 @@ if __name__ == "__main__":
                          default=False,
                          action='store_true',
                          help='run ArduPilot binaries under valgrind')
+    group_sim.add_option("", "--callgrind",
+                         action='store_true',
+                         default=False,
+                         help="enable valgrind for performance analysis (slow!!)")
     group_sim.add_option("--gdb",
                          default=False,
                          action='store_true',
@@ -994,6 +1032,10 @@ if __name__ == "__main__":
                                 type='string',
                                 default="",
                                 help='list available subtests for a vehicle e.g Copter')
+    group_completion.add_option("--reset-after-every-test",
+                                action='store_true',
+                                default=False,
+                                help='reset everything after every test run')
     parser.add_option_group(group_completion)
 
     opts, args = parser.parse_args()
@@ -1012,6 +1054,8 @@ if __name__ == "__main__":
         opts.timeout = 5400
         # adjust if we're running in a regime which may slow us down e.g. Valgrind
         if opts.valgrind:
+            opts.timeout *= 10
+        elif opts.callgrind:
             opts.timeout *= 10
         elif opts.gdb:
             opts.timeout = None
@@ -1055,21 +1099,23 @@ if __name__ == "__main__":
         'defaults.Sub',
         'test.Sub',
 
+        'build.Blimp',
+        'defaults.Blimp',
+
         'build.SITLPeriphGPS',
         'test.CAN',
 
-        'convertgpx',
+        # convertgps disabled as it takes 5 hours
+        # 'convertgpx',
     ]
 
     moresteps = [
-        'test.CopterTests1',
         'test.CopterTests1a',
         'test.CopterTests1b',
         'test.CopterTests1c',
         'test.CopterTests1d',
         'test.CopterTests1e',
 
-        'test.CopterTests2',
         'test.CopterTests2a',
         'test.CopterTests2b',
 
@@ -1100,14 +1146,12 @@ if __name__ == "__main__":
         "defaults.ArduSub": "defaults.Sub",
         "defaults.APMrover2": "defaults.Rover",
         "defaults.AntennaTracker": "defaults.Tracker",
-        "fly.ArduCopterTests1": "test.CopterTests1",
         "fly.ArduCopterTests1a": "test.CopterTests1a",
         "fly.ArduCopterTests1b": "test.CopterTests1b",
         "fly.ArduCopterTests1c": "test.CopterTests1c",
         "fly.ArduCopterTests1d": "test.CopterTests1d",
         "fly.ArduCopterTests1e": "test.CopterTests1e",
 
-        "fly.ArduCopterTests2": "test.CopterTests2",
         "fly.ArduCopterTests2a": "test.CopterTests2a",
         "fly.ArduCopterTests2b": "test.CopterTests2b",
 
@@ -1170,6 +1214,10 @@ if __name__ == "__main__":
         newargs.append(arg)
     args = newargs
 
+    if len(args) == 0 and not opts.autotest_server:
+        print("Steps must be supplied; try --list and/or --list-subtests or --help")
+        sys.exit(1)
+
     if len(args) > 0:
         # allow a wildcard list of steps
         matched = []
@@ -1188,12 +1236,6 @@ if __name__ == "__main__":
                 sys.exit(1)
             matched.extend(matches)
         steps = matched
-    elif opts.autotest_server:
-        # we will be changing this script to give a help message if
-        # --autotest-server isn't given, instead of assuming we want
-        # to do everything that happens on autotest.ardupilot.org,
-        # which includes some significant state-changing actions.
-        print("AutoTest-Server Mode")
 
     # skip steps according to --skip option:
     steps_to_run = [s for s in steps if should_run_step(s)]

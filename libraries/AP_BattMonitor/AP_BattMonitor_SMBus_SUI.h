@@ -11,7 +11,6 @@ public:
     AP_BattMonitor_SMBus_SUI(AP_BattMonitor &mon,
                              AP_BattMonitor::BattMonitor_State &mon_state,
                              AP_BattMonitor_Params &params,
-                             AP_HAL::OwnPtr<AP_HAL::I2CDevice> dev,
                              uint8_t cell_count
                             );
 
@@ -22,8 +21,7 @@ private:
     void read_cell_voltages();
     void update_health();
 
-    // read_block - returns number of characters read if successful, zero if unsuccessful
-    bool read_block(uint8_t reg, uint8_t* data, uint8_t len) const;
+    // read_block_bare - returns number of characters read if successful, zero if unsuccessful
     bool read_block_bare(uint8_t reg, uint8_t* data, uint8_t len) const;
 
     const uint8_t cell_count;

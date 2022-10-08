@@ -32,10 +32,11 @@ struct GCS_MAVLINK::ftp_state GCS_MAVLINK::ftp;
 bool GCS_MAVLINK::ftp_init(void) {
 
     // check if ftp is disabled for memory savings
+#if !defined(HAL_BUILD_AP_PERIPH)
     if (AP_BoardConfig::ftp_disabled()) {
         goto failed;
     }
-
+#endif
     // we can simply check if we allocated everything we need
 
     if (ftp.requests != nullptr) {
@@ -322,7 +323,7 @@ void GCS_MAVLINK::ftp_worker(void) {
                         }
 
                         // fill the buffer
-                        const ssize_t read_bytes = AP::FS().read(ftp.fd, reply.data, request.size);
+                        const ssize_t read_bytes = AP::FS().read(ftp.fd, reply.data, MIN(sizeof(reply.data),request.size));
                         if (read_bytes == -1) {
                             ftp_error(reply, FTP_ERROR::FailErrno);
                             break;
@@ -507,7 +508,7 @@ void GCS_MAVLINK::ftp_worker(void) {
                         const uint32_t transfer_size = 100;
                         for (uint32_t i = 0; (i < transfer_size); i++) {
                             // fill the buffer
-                            const ssize_t read_bytes = AP::FS().read(ftp.fd, reply.data, max_read);
+                            const ssize_t read_bytes = AP::FS().read(ftp.fd, reply.data, MIN(sizeof(reply.data), max_read));
                             if (read_bytes == -1) {
                                 ftp_error(reply, FTP_ERROR::FailErrno);
                                 break;
@@ -566,7 +567,7 @@ void GCS_MAVLINK::ftp_worker(void) {
 
 // calculates how much string length is needed to fit this in a list response
 int GCS_MAVLINK::gen_dir_entry(char *dest, size_t space, const char *path, const struct dirent * entry) {
-    const bool is_file = entry->d_type == DT_REG;
+    const bool is_file = entry->d_type == DT_REG || entry->d_type == DT_LNK;
 
     if (space < 3) {
         return -1;
@@ -578,16 +579,21 @@ int GCS_MAVLINK::gen_dir_entry(char *dest, size_t space, const char *path, const
     }
 
     if (is_file) {
-        const size_t full_path_len = strlen(path) + strnlen(entry->d_name, 256); // FIXME: Really should do better then just hardcoding 256
+#ifdef MAX_NAME_LEN
+        const uint8_t max_name_len = MIN(unsigned(MAX_NAME_LEN), 255U);
+#else
+        const uint8_t max_name_len = 255U;
+#endif
+        const size_t full_path_len = strlen(path) + strnlen(entry->d_name, max_name_len);
         char full_path[full_path_len + 2];
         hal.util->snprintf(full_path, sizeof(full_path), "%s/%s", path, entry->d_name);
         struct stat st;
         if (AP::FS().stat(full_path, &st)) {
             return -1;
         }
-        return hal.util->snprintf(dest, space, "F%s\t%u\0", entry->d_name, (unsigned)st.st_size);
+        return hal.util->snprintf(dest, space, "F%s\t%u%c", entry->d_name, (unsigned)st.st_size, (char)0);
     } else {
-        return hal.util->snprintf(dest, space, "D%s\0", entry->d_name);
+        return hal.util->snprintf(dest, space, "D%s%c", entry->d_name, (char)0);
     }
 }
 

@@ -6,6 +6,7 @@ import sys
 import struct
 from argparse import ArgumentParser
 from dataclasses import dataclass
+from elftools.elf.elffile import ELFFile
 from typing import Any
 
 
@@ -65,7 +66,7 @@ class BoardSubType(enum.Enum):
     LINUX_POCKET = 1022
     LINUX_NAVIGATOR = 1023
     LINUX_VNAV = 1024
-
+    LINUX_OBAL = 1025
     CHIBIOS_SKYVIPER_F412 = 5000
     CHIBIOS_FMUV3 = 5001
     CHIBIOS_FMUV4 = 5002
@@ -93,6 +94,7 @@ class FWVersion:
     os_software_version: int = 0
     firmware_string: str = ""
     firmware_hash_string: str = ""
+    firmware_hash: int = 0
     middleware_name: str = ""
     middleware_hash_string: str = ""
     os_name: str = ""
@@ -119,6 +121,7 @@ class FWVersion:
         board: {BoardType(self.board_type).name}
         board subtype: {BoardSubType(self.board_subtype).name}
         hash: {self.firmware_hash_string}
+        hash integer: 0x{self.firmware_hash:02x}
         version: {self.major}.{self.minor}.{self.patch}
         type: {FirmwareVersionType(self.firmware_type).name}
     os:
@@ -137,6 +140,7 @@ class Decoder:
         self.fwversion = FWVersion()
         self.byteorder = ""
         self.pointer_size = 0
+        self.elffile = None
 
     def unpack(self, struct_format: str) -> Any:
         struct_format = f"{self.byteorder}{struct_format}"
@@ -150,6 +154,9 @@ class Decoder:
         # nullptr, return empty string
         if address == 0:
             return ""
+
+        # Calculate address offset for PIE (Position Independent Executables) binaries
+        address = next(self.elffile.address_offsets(address))
 
         current_address = self.bytesio.seek(0, io.SEEK_CUR)
         self.bytesio.seek(address)
@@ -172,6 +179,8 @@ class Decoder:
         )
 
         self.fwversion.header_version = self.unpack("H")
+        major_version = self.fwversion.header_version >> 8
+
         self.pointer_size = self.unpack("B")
         self.fwversion.pointer_size = self.pointer_size
         self.unpack("B")  # reserved
@@ -187,14 +196,19 @@ class Decoder:
 
         self.fwversion.firmware_string = self.unpack_string_from_pointer()
         self.fwversion.firmware_hash_string = self.unpack_string_from_pointer()
+        if major_version >= 2:
+            self.fwversion.firmware_hash = self.unpack("I")
+
         self.fwversion.middleware_name = self.unpack_string_from_pointer()
         self.fwversion.middleware_hash_string = self.unpack_string_from_pointer()
         self.fwversion.os_name = self.unpack_string_from_pointer()
         self.fwversion.os_hash_string = self.unpack_string_from_pointer()
 
-    def process(self, filename) -> None:
-        with open(filename, "rb") as file:
-            data = file.read()
+    def process(self, filename) -> FWVersion:
+        # We need the file open for ELFFile
+        file = open(filename, "rb")
+        data = file.read()
+        self.elffile = ELFFile(file)
 
         if not data:
             raise RuntimeError("Failed to find FWVersion.")
@@ -212,7 +226,7 @@ class Decoder:
 
         # Unpack struct and print it
         self.unpack_fwversion()
-        print(self.fwversion)
+        return self.fwversion
 
 
 if __name__ == "__main__":
@@ -226,9 +240,23 @@ if __name__ == "__main__":
         "-f",
         dest="file",
         required=True,
-        help="File that contains a valid ardupilot firmware.",
+        help="File that contains a valid ardupilot firmware in ELF format.",
+    )
+    parser.add_argument(
+        "--expected-hash",
+        dest="expected_hash",
+        help="Expected git hash. The script fails if this doesn't match the git hash in the binary file. Used in CI",
     )
     args = parser.parse_args()
 
     decoder = Decoder()
-    decoder.process(args.file)
+    try:
+        firmware_data = decoder.process(args.file)
+    except Exception as e:
+        print(f"Error decoding FWVersion: {type(e)}")
+        exit(-1)
+
+    print(firmware_data)
+    if args.expected_hash and args.expected_hash != firmware_data.firmware_hash_string:
+        print(f"Git hashes don't match! expected: {args.expected_hash}, got {firmware_data.firmware_hash_string}")
+        exit(-1)

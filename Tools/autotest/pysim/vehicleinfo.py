@@ -105,7 +105,11 @@ class VehicleInfo(object):
             },
             "deca-cwx": {
                 "waf_target": "bin/arducopter",
-                "default_params_filename": "default_params/copter.parm",
+                "default_params_filename": [
+                    "default_params/copter.parm",
+                    "default_params/copter-deca.parm",
+                    "default_params/copter-deca-cwx.parm"
+                 ],
             },
             "tri": {
                 "waf_target": "bin/arducopter",
@@ -150,6 +154,11 @@ class VehicleInfo(object):
                 "default_params_filename": ["default_params/copter-heli.parm",
                                             "default_params/copter-heli-dual.parm"],
             },
+            "heli-blade360": {
+                "waf_target": "bin/arducopter-heli",
+                "default_params_filename": ["default_params/copter-heli.parm",
+                ],
+            },
             "singlecopter": {
                 "waf_target": "bin/arducopter",
                 "default_params_filename": "default_params/copter-single.parm",
@@ -193,14 +202,17 @@ class VehicleInfo(object):
             #     "default_params_filename": ["default_params/copter-heli.parm",
             #                                 "default_params/copter-heli-compound.parm"],
             # },
+            "heli-blade360": {
+                "waf_target": "bin/arducopter-heli",
+                "default_params_filename": ["default_params/copter-heli.parm",
+                ],
+            },
         },
     },
     "Blimp": {
-        "default_frame": "quad",
+        "default_frame": "Blimp",
         "frames": {
-            # BLIMP
-            "quad": {
-                "model": "+",
+            "Blimp": {
                 "waf_target": "bin/blimp",
                 "default_params_filename": "default_params/blimp.parm",
             },
@@ -234,6 +246,10 @@ class VehicleInfo(object):
                 "waf_target": "bin/arduplane",
                 "default_params_filename": "default_params/quadplane.parm",
             },
+            "quadplane-ice": {
+                "waf_target": "bin/arduplane",
+                "default_params_filename": ["default_params/quadplane.parm", "default_params/plane-ice.parm", "default_params/quadplane-ice.parm"],
+            },
             "firefly": {
                 "waf_target": "bin/arduplane",
                 "default_params_filename": "default_params/firefly.parm",
@@ -253,6 +269,14 @@ class VehicleInfo(object):
             "plane-jet": {
                 "waf_target": "bin/arduplane",
                 "default_params_filename": ["default_params/plane.parm", "default_params/plane-jet.parm"],
+            },
+            "plane-ice": {
+                "waf_target": "bin/arduplane",
+                "default_params_filename": ["default_params/plane.parm", "default_params/plane-ice.parm"],
+            },
+            "quadplane-copter_tailsitter": {
+                "waf_target": "bin/arduplane",
+                "default_params_filename": ["default_params/quadplane.parm","default_params/quadplane-copter_tailsitter.parm"],
             },
             "plane": {
                 "waf_target": "bin/arduplane",
@@ -321,6 +345,11 @@ class VehicleInfo(object):
                                             "default_params/rover-skid.parm",
                                             "default_params/balancebot.parm"],
             },
+            "motorboat": {
+                "waf_target": "bin/ardurover",
+                "default_params_filename": ["default_params/rover.parm",
+                                            "default_params/motorboat.parm"],
+            },
             "sailboat": {
                 "waf_target": "bin/ardurover",
                 "default_params_filename": ["default_params/rover.parm",
@@ -370,6 +399,14 @@ class VehicleInfo(object):
                 "waf_target": "bin/antennatracker",
             },
         },
+    },
+    "sitl_periph_gps": {
+        "frames": {
+            "gps": {
+                "configure_target": "sitl_periph_gps",
+                "waf_target": "bin/AP_Periph",
+                },
+            }
     },
 }
 

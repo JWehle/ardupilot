@@ -87,7 +87,7 @@ const AP_Param::GroupInfo AP_Parachute::var_info[] = {
 /// enabled - enable or disable parachute release
 void AP_Parachute::enabled(bool on_off)
 {
-    _enabled = on_off;
+    _enabled.set(on_off);
 
     // clear release_time
     _release_time = 0;
@@ -206,7 +206,11 @@ bool AP_Parachute::arming_checks(size_t buflen, char *buffer) const
                 return false;
             }
         } else if (!_relay.enabled(_release_type)) {
-            hal.util->snprintf(buffer, buflen, "Chute invalid relay %d", _release_type);
+            hal.util->snprintf(buffer, buflen, "Chute invalid relay %d", int(_release_type));
+            return false;
+        }
+        if (_release_initiated) {
+            hal.util->snprintf(buffer, buflen, "Chute is released");
             return false;
         }
     }

@@ -18,6 +18,7 @@
 #include <AP_RCProtocol/AP_RCProtocol.h>
 #include <AP_InternalError/AP_InternalError.h>
 #include <AP_Logger/AP_Logger.h>
+#include <ch.h>
 
 extern const AP_HAL::HAL &hal;
 
@@ -34,7 +35,8 @@ enum ioevents {
     IOEVENT_SET_HEATER_TARGET,
     IOEVENT_SET_DEFAULT_RATE,
     IOEVENT_SET_SAFETY_MASK,
-    IOEVENT_MIXING
+    IOEVENT_MIXING,
+    IOEVENT_GPIO,
 };
 
 // max number of consecutve protocol failures we accept before raising
@@ -218,6 +220,16 @@ void AP_IOMCU::thread_main(void)
         }
         mask &= ~EVENT_MASK(IOEVENT_SET_SAFETY_MASK);
 
+        if (is_chibios_backend) {
+            if (mask & EVENT_MASK(IOEVENT_GPIO)) {
+                if (!write_registers(PAGE_GPIO, 0, sizeof(GPIO)/sizeof(uint16_t), (const uint16_t*)&GPIO)) {
+                    event_failed(mask);
+                    continue;
+                }
+            }
+            mask &= ~EVENT_MASK(IOEVENT_GPIO);
+        }
+
         // check for regular timed events
         uint32_t now = AP_HAL::millis();
         if (now - last_rc_read_ms > 20) {
@@ -230,6 +242,7 @@ void AP_IOMCU::thread_main(void)
             // read status at 20Hz
             read_status();
             last_status_read_ms = AP_HAL::millis();
+            write_log();
         }
 
         if (now - last_servo_read_ms > 50) {
@@ -241,14 +254,6 @@ void AP_IOMCU::thread_main(void)
         if (now - last_safety_option_check_ms > 1000) {
             update_safety_options();
             last_safety_option_check_ms = now;
-        }
-
-        // update safety pwm
-        if (pwm_out.safety_pwm_set != pwm_out.safety_pwm_sent) {
-            uint8_t set = pwm_out.safety_pwm_set;
-            if (write_registers(PAGE_SAFETY_PWM, 0, IOMCU_MAX_CHANNELS, pwm_out.safety_pwm)) {
-                pwm_out.safety_pwm_sent = set;
-            }
         }
 
         // update failsafe pwm
@@ -346,7 +351,10 @@ void AP_IOMCU::read_status()
             force_safety_off();
         }
     }
+}
 
+void AP_IOMCU::write_log()
+{
     uint32_t now = AP_HAL::millis();
     if (now - last_log_ms >= 1000U) {
         last_log_ms = now;
@@ -354,14 +362,16 @@ void AP_IOMCU::read_status()
 // @LoggerMessage: IOMC
 // @Description: IOMCU diagnostic information
 // @Field: TimeUS: Time since system startup
+// @Field: RSErr: Status Read error count (zeroed on successful read)
 // @Field: Mem: Free memory
 // @Field: TS: IOMCU uptime
 // @Field: NPkt: Number of packets received by IOMCU
 // @Field: Nerr: Protocol failures on MCU side
 // @Field: Nerr2: Reported number of failures on IOMCU side
 // @Field: NDel: Number of delayed packets received by MCU
-            AP::logger().Write("IOMC", "TimeUS,Mem,TS,NPkt,Nerr,Nerr2,NDel", "QHIIIII",
+            AP::logger().WriteStreaming("IOMC", "TimeUS,RSErr,Mem,TS,NPkt,Nerr,Nerr2,NDel", "QHHIIIII",
                                AP_HAL::micros64(),
+                               read_status_errors,
                                reg_status.freemem,
                                reg_status.timestamp_ms,
                                reg_status.total_pkts,
@@ -810,7 +820,7 @@ bool AP_IOMCU::check_crc(void)
 
     fw = AP_ROMFS::find_decompress(fw_name, fw_size);
     if (!fw) {
-        hal.console->printf("failed to find %s\n", fw_name);
+        DEV_PRINTF("failed to find %s\n", fw_name);
         return false;
     }
     uint32_t crc = crc32_small(0, fw, fw_size);
@@ -829,13 +839,13 @@ bool AP_IOMCU::check_crc(void)
         }
     }
     if (io_crc == crc) {
-        hal.console->printf("IOMCU: CRC ok\n");
+        DEV_PRINTF("IOMCU: CRC ok\n");
         crc_is_ok = true;
         AP_ROMFS::free(fw);
         fw = nullptr;
         return true;
     } else {
-        hal.console->printf("IOMCU: CRC mismatch expected: 0x%X got: 0x%X\n", (unsigned)crc, (unsigned)io_crc);
+        DEV_PRINTF("IOMCU: CRC mismatch expected: 0x%X got: 0x%X\n", (unsigned)crc, (unsigned)io_crc);
     }
 
     const uint16_t magic = REBOOT_BL_MAGIC;
@@ -850,25 +860,6 @@ bool AP_IOMCU::check_crc(void)
     AP_ROMFS::free(fw);
     fw = nullptr;
     return false;
-}
-
-/*
-  set the pwm to use when safety is on
- */
-void AP_IOMCU::set_safety_pwm(uint16_t chmask, uint16_t period_us)
-{
-    bool changed = false;
-    for (uint8_t i=0; i<IOMCU_MAX_CHANNELS; i++) {
-        if (chmask & (1U<<i)) {
-            if (pwm_out.safety_pwm[i] != period_us) {
-                pwm_out.safety_pwm[i] = period_us;
-                changed = true;
-            }
-        }
-    }
-    if (changed) {
-        pwm_out.safety_pwm_set++;
-    }
 }
 
 /*
@@ -973,7 +964,7 @@ bool AP_IOMCU::setup_mixing(RCMapper *rcmap, int8_t override_chan,
         MIX_UPDATE(mixing.rc_reversed[i], c->get_reverse());
 
         // cope with reversible throttle
-        if (i == 2 && c->get_type() == RC_Channel::RC_CHANNEL_TYPE_ANGLE) {
+        if (i == 2 && c->get_type() == RC_Channel::ControlType::ANGLE) {
             MIX_UPDATE(mixing.throttle_is_angle, 1);
         } else {
             MIX_UPDATE(mixing.throttle_is_angle, 0);
@@ -1026,7 +1017,7 @@ void AP_IOMCU::check_iomcu_reset(void)
     if (last_iocmu_timestamp_ms == 0) {
         // initialisation
         last_iocmu_timestamp_ms = reg_status.timestamp_ms;
-        hal.console->printf("IOMCU startup\n");
+        DEV_PRINTF("IOMCU startup\n");
         return;
     }
     uint32_t dt_ms = reg_status.timestamp_ms - last_iocmu_timestamp_ms;
@@ -1077,6 +1068,65 @@ void AP_IOMCU::check_iomcu_reset(void)
         trigger_event(IOEVENT_SET_SAFETY_MASK);
     }
     last_rc_protocols = 0;
+}
+
+// Check if pin number is valid and configured for GPIO
+bool AP_IOMCU::valid_GPIO_pin(uint8_t pin) const
+{
+    // sanity check pin number
+    if (!convert_pin_number(pin)) {
+        return false;
+    }
+
+    // check pin is enabled as GPIO
+    return ((GPIO.channel_mask & (1U << pin)) != 0);
+}
+
+// convert external pin numbers 101 to 108 to internal 0 to 7
+bool AP_IOMCU::convert_pin_number(uint8_t& pin) const
+{
+    if (pin < 101 || pin > 108) {
+        return false;
+    }
+    pin -= 101;
+    return true;
+}
+
+// set GPIO mask of channels setup for output
+void AP_IOMCU::set_GPIO_mask(uint8_t mask)
+{
+    if (mask == GPIO.channel_mask) {
+        return;
+    }
+    GPIO.channel_mask = mask;
+    trigger_event(IOEVENT_GPIO);
+}
+
+// write to a output pin
+void AP_IOMCU::write_GPIO(uint8_t pin, bool value)
+{
+    if (!convert_pin_number(pin)) {
+        return;
+    }
+    if (value == ((GPIO.output_mask & (1U << pin)) != 0)) {
+        return;
+    }
+    if (value) {
+        GPIO.output_mask |= (1U << pin);
+    } else {
+        GPIO.output_mask &= ~(1U << pin);
+    }
+    trigger_event(IOEVENT_GPIO);
+}
+
+// toggle a output pin
+void AP_IOMCU::toggle_GPIO(uint8_t pin)
+{
+    if (!convert_pin_number(pin)) {
+        return;
+    }
+    GPIO.output_mask ^= (1U << pin);
+    trigger_event(IOEVENT_GPIO);
 }
 
 

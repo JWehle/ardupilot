@@ -56,8 +56,8 @@ void GCS_Sub::update_vehicle_sensor_status_flags()
         control_sensors_health |= MAV_SYS_STATUS_SENSOR_ABSOLUTE_PRESSURE;
     }
 
-#if OPTFLOW == ENABLED
-    const OpticalFlow *optflow = AP::opticalflow();
+#if AP_OPTICALFLOW_ENABLED
+    const AP_OpticalFlow *optflow = AP::opticalflow();
     if (optflow && optflow->enabled()) {
         control_sensors_present |= MAV_SYS_STATUS_SENSOR_OPTICAL_FLOW;
         control_sensors_enabled |= MAV_SYS_STATUS_SENSOR_OPTICAL_FLOW;
@@ -96,7 +96,11 @@ void GCS_Sub::update_vehicle_sensor_status_flags()
 #endif
 }
 
+#if AP_LTM_TELEM_ENABLED
 // avoid building/linking LTM:
 void AP_LTM_Telem::init() {};
+#endif
+#if AP_DEVO_TELEM_ENABLED
 // avoid building/linking Devo:
 void AP_DEVO_Telem::init() {};
+#endif

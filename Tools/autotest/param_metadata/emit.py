@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """
  The standard interface emitters must implement
 """
@@ -10,7 +9,7 @@ class Emit:
     def __init__(self, sitl=False):
         self.sitl = sitl
 
-    prog_values_field = re.compile(r"\s*(-?\w+:\w+)+,*")
+    prog_values_field = re.compile(r"-?\d*\.?\d+: ?[\w ]+,?")
 
     def close(self):
         pass

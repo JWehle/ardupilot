@@ -25,7 +25,7 @@
 #include <AP_Vehicle/AP_Vehicle_Type.h>
 
 #ifndef HAL_RUNCAM_ENABLED
-#define HAL_RUNCAM_ENABLED !HAL_MINIMIZE_FEATURES && !APM_BUILD_TYPE(APM_BUILD_Replay)
+#define HAL_RUNCAM_ENABLED !HAL_MINIMIZE_FEATURES
 #endif
 
 #if HAL_RUNCAM_ENABLED
@@ -50,8 +50,7 @@ public:
     AP_RunCam();
 
     // do not allow copies
-    AP_RunCam(const AP_RunCam &other) = delete;
-    AP_RunCam &operator=(const AP_RunCam &) = delete;
+    CLASS_NO_COPY(AP_RunCam);
 
     // get singleton instance
     static AP_RunCam *get_singleton() {

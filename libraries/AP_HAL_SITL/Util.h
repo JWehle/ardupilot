@@ -39,8 +39,10 @@ public:
     void commandline_arguments(uint8_t &argc, char * const *&argv) override;
     
     uint64_t get_hw_rtc() const override;
+    void set_hw_rtc(uint64_t time_utc_usec) override { /* fail silently */ }
 
-    bool get_system_id(char buf[40]) override;
+
+    bool get_system_id(char buf[50]) override;
     bool get_system_id_unformatted(uint8_t buf[], uint8_t &len) override;
     void dump_stack_trace();
 

@@ -15,13 +15,10 @@
 
 #include "AP_WindVane_SITL.h"
 
-// constructor
-AP_WindVane_SITL::AP_WindVane_SITL(AP_WindVane &frontend) :
-    AP_WindVane_Backend(frontend)
-{
-}
-
 #if CONFIG_HAL_BOARD == HAL_BOARD_SITL
+
+#include <SITL/SITL.h>
+#include <AP_AHRS/AP_AHRS.h>
 
 void AP_WindVane_SITL::update_direction()
 {

@@ -12,8 +12,7 @@ public:
     }
 
     /* Do not allow copies */
-    AP_Frsky_SPort(const AP_Frsky_SPort &other) = delete;
-    AP_Frsky_SPort &operator=(const AP_Frsky_SPort&) = delete;
+    CLASS_NO_COPY(AP_Frsky_SPort);
 
     void send() override;
     // send an sport packet by responding to the specified polled sensor
@@ -29,9 +28,9 @@ protected:
 
     void send_sport_frame(uint8_t frame, uint16_t appid, uint32_t data);
 
-    struct PACKED {
-        bool send_latitude; // sizeof(bool) = 4 ?
-        bool send_airspeed; // toggles 0x5005 between airspeed and groundspeed
+    struct {
+        bool send_latitude;
+        bool send_airspeed;     // toggles 0x5005 between airspeed and groundspeed
         uint32_t gps_lng_sample;
         uint8_t new_byte;
     } _passthrough;

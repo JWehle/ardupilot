@@ -16,13 +16,15 @@
   IMU temperature calibration handling
  */
 
+#define AP_INLINE_VECTOR_OPS
+
 #include "AP_InertialSensor.h"
 
 #if HAL_INS_TEMPERATURE_CAL_ENABLE
-
 #include <GCS_MAVLink/GCS.h>
 #include <AP_Logger/AP_Logger.h>
 #include <AP_Common/ExpandingString.h>
+#include <AP_Notify/AP_Notify.h>
 
 // this scale factor ensures params are easy to work with in GUI parameter editors
 #define SCALE_FACTOR 1.0e6
@@ -302,7 +304,7 @@ void AP_InertialSensor::TCal::Learn::add_sample(const Vector3f &sample, float te
     }
 
     const float tdiff = T - TEMP_REFERENCE;
-
+#if HAL_LOGGING_ENABLED
     AP::logger().Write("TCLR", "TimeUS,I,SType,Temp,X,Y,Z,NSamp",
                        "s#------",
                        "F000000-",
@@ -313,6 +315,7 @@ void AP_InertialSensor::TCal::Learn::add_sample(const Vector3f &sample, float te
                        T,
                        st.sum.x, st.sum.y, st.sum.z,
                        st.sum_count);
+#endif
     
     
     st.pfit.update(tdiff, st.sum);
@@ -376,7 +379,7 @@ void AP_InertialSensor::TCal::update_gyro_learning(const Vector3f &gyro, float t
  */
 void AP_InertialSensor::TCal::Learn::reset(float temperature)
 {
-    memset(state, 0, sizeof(state));
+    memset((void*)&state[0], 0, sizeof(state));
     start_tmax = tcal.temp_max;
     accel_start.zero();
     for (uint8_t i=0; i<ARRAY_SIZE(state); i++) {

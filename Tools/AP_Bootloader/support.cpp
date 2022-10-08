@@ -17,6 +17,7 @@
 #include "mcu_f7.h"
 #include "mcu_h7.h"
 #include "mcu_g4.h"
+#include "mcu_l4.h"
 
 // optional uprintf() code for debug
 // #define BOOTLOADER_DEBUG SD1
@@ -118,7 +119,7 @@ uint32_t flash_func_read_word(uint32_t offset)
 {
     return *(const uint32_t *)(flash_base + offset);
 }
-#pragma pop
+#pragma GCC diagnostic pop
 
 bool flash_func_write_word(uint32_t offset, uint32_t v)
 {
@@ -271,24 +272,6 @@ uint32_t get_mcu_desc(uint32_t max, uint8_t *revstr)
     }
 
     return  strp - revstr;
-}
-
-/*
-  see if we should limit flash to 1M on devices with older revisions
- */
-bool check_limit_flash_1M(void)
-{
-#ifdef STM32F427xx
-    uint32_t idcode = (*(uint32_t *)DBGMCU_BASE);
-    uint16_t revid = ((idcode & REVID_MASK) >> 16);
-
-    for (int i = 0; i < ARRAY_SIZE(silicon_revs); i++) {
-        if (silicon_revs[i].revid == revid) {
-            return silicon_revs[i].limit_flash_size_1M;
-        }
-    }
-#endif
-    return false;
 }
 
 void led_on(unsigned led)

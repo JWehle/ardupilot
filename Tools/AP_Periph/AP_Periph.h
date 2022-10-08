@@ -11,19 +11,18 @@
 #include <AP_BattMonitor/AP_BattMonitor.h>
 #include <AP_Airspeed/AP_Airspeed.h>
 #include <AP_RangeFinder/AP_RangeFinder.h>
+#include <AP_EFI/AP_EFI.h>
 #include <AP_MSP/AP_MSP.h>
 #include <AP_MSP/msp.h>
 #include "../AP_Bootloader/app_comms.h"
+#include <AP_CheckFirmware/AP_CheckFirmware.h>
 #include "hwing_esc.h"
 #include <AP_CANManager/AP_CANManager.h>
+#include <AP_Scripting/AP_Scripting.h>
+#include <AP_HAL/CANIface.h>
+#include <AP_Stats/AP_Stats.h>
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_CHIBIOS
-#include <AP_HAL_ChibiOS/CANIface.h>
-#elif CONFIG_HAL_BOARD == HAL_BOARD_SITL
-#include <AP_HAL_SITL/CANSocketIface.h>
-#endif
-
-#ifndef HAL_NO_GCS
+#if HAL_GCS_ENABLED
 #include "GCS_MAVLink.h"
 #endif
 
@@ -32,7 +31,7 @@
 #endif
 
 #ifdef HAL_PERIPH_ENABLE_NOTIFY
-    #ifndef HAL_PERIPH_ENABLE_RC_OUT
+    #if !defined(HAL_PERIPH_ENABLE_RC_OUT) && !defined(HAL_PERIPH_NOTIFY_WITHOUT_RCOUT)
         #error "HAL_PERIPH_ENABLE_NOTIFY requires HAL_PERIPH_ENABLE_RC_OUT"
     #endif
     #ifdef HAL_PERIPH_ENABLE_BUZZER_WITHOUT_NOTIFY
@@ -46,11 +45,6 @@
     #endif
 #endif
 
-#if defined(HAL_PERIPH_ENABLE_BATTERY_MPPT_PACKETDIGITAL) && HAL_MAX_CAN_PROTOCOL_DRIVERS < 2
-#error "Battery MPPT PacketDigital driver requires at least two CAN Ports"
-#endif
-
-
 #include "Parameters.h"
 
 #if CONFIG_HAL_BOARD == HAL_BOARD_SITL
@@ -58,9 +52,13 @@ void stm32_watchdog_init();
 void stm32_watchdog_pat();
 #endif
 /*
-  app descriptor compatible with MissionPlanner
+  app descriptor for firmware checking
  */
-extern const struct app_descriptor app_descriptor;
+extern const app_descriptor_t app_descriptor;
+
+extern "C" {
+void can_printf(const char *fmt, ...) FMT_PRINTF(1,2);
+}
 
 class AP_Periph_FW {
 public:
@@ -85,6 +83,8 @@ public:
     void can_update();
     void can_mag_update();
     void can_gps_update();
+    void send_moving_baseline_msg();
+    void send_relposheading_msg();
     void can_baro_update();
     void can_airspeed_update();
     void can_rangefinder_update();
@@ -92,6 +92,11 @@ public:
 
     void load_parameters();
     void prepare_reboot();
+    bool canfdout() const { return (g.can_fdmode == 1); }
+
+#ifdef HAL_PERIPH_ENABLE_EFI
+    void can_efi_update();
+#endif
 
 #ifdef HAL_PERIPH_LISTEN_FOR_SERIAL_UART_REBOOT_CMD_PORT
     void check_for_serial_reboot_cmd(const int8_t serial_index);
@@ -105,8 +110,15 @@ public:
 
     AP_SerialManager serial_manager;
 
+#if AP_STATS_ENABLED
+    AP_Stats node_stats;
+#endif
+
 #ifdef HAL_PERIPH_ENABLE_GPS
     AP_GPS gps;
+#if HAL_NUM_CAN_IFACES >= 2
+    int8_t gps_mb_can_port = -1;
+#endif
 #endif
 
 #ifdef HAL_PERIPH_ENABLE_MAG
@@ -168,6 +180,7 @@ public:
 
 #ifdef HAL_PERIPH_ENABLE_RANGEFINDER
     RangeFinder rangefinder;
+    uint32_t last_sample_ms;
 #endif
 
 #ifdef HAL_PERIPH_ENABLE_PWM_HARDPOINT
@@ -188,14 +201,27 @@ public:
     void hwesc_telem_update();
 #endif
 
+#ifdef HAL_PERIPH_ENABLE_EFI
+    AP_EFI efi;
+    uint32_t efi_update_ms;
+#endif
+    
 #ifdef HAL_PERIPH_ENABLE_RC_OUT
+#if HAL_WITH_ESC_TELEM
+    AP_ESC_Telem esc_telem;
+    uint32_t last_esc_telem_update_ms;
+    void esc_telem_update();
+    uint32_t esc_telem_update_period_ms;
+#endif
+
     SRV_Channels servo_channels;
     bool rcout_has_new_data_to_update;
 
     void rcout_init();
     void rcout_init_1Hz();
     void rcout_esc(int16_t *rc, uint8_t num_channels);
-    void rcout_srv(const uint8_t actuator_id, const float command_value);
+    void rcout_srv_unitless(const uint8_t actuator_id, const float command_value);
+    void rcout_srv_PWM(const uint8_t actuator_id, const float command_value);
     void rcout_update();
     void rcout_handle_safety_state(uint8_t safety_state);
 #endif
@@ -207,6 +233,21 @@ public:
 #ifdef HAL_PERIPH_ENABLE_NOTIFY
     // notification object for LEDs, buzzers etc
     AP_Notify notify;
+    uint64_t vehicle_state = 1; // default to initialisation
+    float yaw_earth;
+    uint32_t last_vehicle_state;
+
+    // Handled under LUA script to control LEDs
+    float get_yaw_earth() { return yaw_earth; }
+    uint32_t get_vehicle_state() { return vehicle_state; }
+#elif defined(AP_SCRIPTING_ENABLED)
+    // create dummy methods for the case when the user doesn't want to use the notify object
+    float get_yaw_earth() { return 0.0; }
+    uint32_t get_vehicle_state() { return 0.0; }
+#endif
+
+#if AP_SCRIPTING_ENABLED
+    AP_Scripting scripting;
 #endif
 
 #if HAL_LOGGING_ENABLED
@@ -214,7 +255,7 @@ public:
     AP_Logger logger;
 #endif
 
-#ifndef HAL_NO_GCS
+#if HAL_GCS_ENABLED
     GCS_Periph _gcs;
 #endif
     // setup the var_info table
@@ -226,13 +267,20 @@ public:
     uint32_t last_gps_update_ms;
     uint32_t last_baro_update_ms;
     uint32_t last_airspeed_update_ms;
+    bool saw_gps_lock_once;
 
     static AP_Periph_FW *_singleton;
+
+    enum {
+        DEBUG_SHOW_STACK,
+        DEBUG_AUTOREBOOT
+    };
 
     // show stack as DEBUG msgs
     void show_stack_free();
 
     static bool no_iface_finished_dna;
+    static constexpr auto can_printf = ::can_printf;
 };
 
 namespace AP
@@ -242,7 +290,4 @@ namespace AP
 
 extern AP_Periph_FW periph;
 
-extern "C" {
-void can_printf(const char *fmt, ...);
-}
 

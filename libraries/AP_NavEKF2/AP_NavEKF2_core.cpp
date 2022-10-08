@@ -194,6 +194,7 @@ void NavEKF2_core::InitialiseVariables()
     gpsPosAccuracy = 0.0f;
     gpsHgtAccuracy = 0.0f;
     baroHgtOffset = 0.0f;
+    rngOnGnd = 0.05f;
     yawResetAngle = 0.0f;
     lastYawReset_ms = 0;
     tiltErrFilt = 1.0f;
@@ -237,6 +238,7 @@ void NavEKF2_core::InitialiseVariables()
     runUpdates = false;
     framesSincePredict = 0;
     gpsYawResetRequest = false;
+    stateStruct.quat.initialise();
     quatAtLastMagReset = stateStruct.quat;
     delAngBiasLearned = false;
     memset(&filterStatus, 0, sizeof(filterStatus));
@@ -596,7 +598,7 @@ void NavEKF2_core::UpdateFilter(bool predict)
     static uint32_t timing_counter;
     total_us += dal.micros() - timing_start_us;
     if (timing_counter++ == 4000) {
-        hal.console->printf("ekf2 avg %.2f us\n", total_us / float(timing_counter));
+        DEV_PRINTF("ekf2 avg %.2f us\n", total_us / float(timing_counter));
         total_us = 0;
         timing_counter = 0;
     }
@@ -675,7 +677,7 @@ void NavEKF2_core::UpdateStrapdownEquationsNED()
     // calculate a magnitude of the filtered nav acceleration (required for GPS
     // variance estimation)
     accNavMag = velDotNEDfilt.length();
-    accNavMagHoriz = norm(velDotNEDfilt.x , velDotNEDfilt.y);
+    accNavMagHoriz = velDotNEDfilt.xy().length();
 
     // if we are not aiding, then limit the horizontal magnitude of acceleration
     // to prevent large manoeuvre transients disturbing the attitude

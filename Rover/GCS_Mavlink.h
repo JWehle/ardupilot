@@ -35,7 +35,6 @@ private:
 
     void handleMessage(const mavlink_message_t &msg) override;
     bool handle_guided_request(AP_Mission::Mission_Command &cmd) override;
-    void handle_change_alt_request(AP_Mission::Mission_Command &cmd) override;
     bool try_send_message(enum ap_message id) override;
 
     void handle_manual_control(const mavlink_message_t &msg);
@@ -43,6 +42,9 @@ private:
     void handle_set_position_target_local_ned(const mavlink_message_t &msg);
     void handle_set_position_target_global_int(const mavlink_message_t &msg);
     void handle_radio(const mavlink_message_t &msg);
+    void handle_landing_target(const mavlink_landing_target_t &msg, uint32_t timestamp_ms) override;
+
+    void send_servo_out();
 
     void packetReceived(const mavlink_status_t &status, const mavlink_message_t &msg) override;
 

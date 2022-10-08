@@ -64,7 +64,11 @@ void AP_RCProtocol_Backend::add_input(uint8_t num_values, uint16_t *values, bool
     memcpy(_pwm_values, values, num_values*sizeof(uint16_t));
     _num_channels = num_values;
     rc_frame_count++;
-#if !APM_BUILD_TYPE(APM_BUILD_iofirmware)
+    frontend.set_failsafe_active(in_failsafe);
+#if APM_BUILD_TYPE(APM_BUILD_iofirmware)
+    // failsafed is sorted out in AP_IOMCU.cpp
+    in_failsafe = false;
+#else
     if (rc().ignore_rc_failsafe()) {
         in_failsafe = false;
     }
@@ -129,7 +133,7 @@ void AP_RCProtocol_Backend::log_data(AP_RCProtocol::rcprotocol_t prot, uint32_t 
 // @Field: U7: eight quartet of bytes
 // @Field: U8: ninth quartet of bytes
 // @Field: U9: tenth quartet of bytes
-        AP::logger().Write("RCDA", "TimeUS,TS,Prot,Len,U0,U1,U2,U3,U4,U5,U6,U7,U8,U9", "QIBBIIIIIIIIII",
+        AP::logger().WriteStreaming("RCDA", "TimeUS,TS,Prot,Len,U0,U1,U2,U3,U4,U5,U6,U7,U8,U9", "QIBBIIIIIIIIII",
                            AP_HAL::micros64(),
                            timestamp,
                            (uint8_t)prot,

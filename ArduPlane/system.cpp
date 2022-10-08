@@ -1,5 +1,7 @@
 #include "Plane.h"
 
+#include "qautotune.h"
+
 /*****************************************************************************
 *   The init_ardupilot function processes everything we need for an in - air restart
 *        We will determine later if we are actually on the ground and process a
@@ -33,6 +35,11 @@ void Plane::init_ardupilot()
     pitchController.convert_pid();
 
     // initialise rc channels including setting mode
+#if HAL_QUADPLANE_ENABLED
+    rc().convert_options(RC_Channel::AUX_FUNC::ARMDISARM_UNUSED, (quadplane.enabled() && quadplane.option_is_set(QuadPlane::OPTION::AIRMODE_UNUSED) && (rc().find_channel_for_option(RC_Channel::AUX_FUNC::AIRMODE) == nullptr)) ? RC_Channel::AUX_FUNC::ARMDISARM_AIRMODE : RC_Channel::AUX_FUNC::ARMDISARM);
+#else
+    rc().convert_options(RC_Channel::AUX_FUNC::ARMDISARM_UNUSED, RC_Channel::AUX_FUNC::ARMDISARM);
+#endif
     rc().init();
 
     relay.init();
@@ -59,7 +66,9 @@ void Plane::init_ardupilot()
 
     rssi.init();
 
+#if AP_RPM_ENABLED
     rpm_sensor.init();
+#endif
 
     // setup telem slots with serial ports
     gcs().setup_uarts();
@@ -73,15 +82,11 @@ void Plane::init_ardupilot()
     log_init();
 #endif
 
-    // initialise airspeed sensor
-    airspeed.init();
-
     AP::compass().set_log_bit(MASK_LOG_COMPASS);
     AP::compass().init();
 
-// init EFI monitoring
-#if HAL_EFI_ENABLED
-    g2.efi.init();
+#if AP_AIRSPEED_ENABLED
+    airspeed.set_log_bit(MASK_LOG_IMU);
 #endif
 
     // GPS Initialization
@@ -111,7 +116,9 @@ void Plane::init_ardupilot()
      */
     hal.scheduler->register_timer_failsafe(failsafe_check_static, 1000);
 
+#if HAL_QUADPLANE_ENABLED
     quadplane.setup();
+#endif
 
     AP_Param::reload_defaults_file(true);
     
@@ -125,9 +132,6 @@ void Plane::init_ardupilot()
         hal.rcout->set_output_mode(g2.oneshot_mask, AP_HAL::RCOutput::MODE_PWM_ONESHOT);
     }
 
-    // choose the nav controller
-    set_nav_controller();
-
     set_mode_by_number((enum Mode::Number)g.initial_mode.get(), ModeReason::INITIALISED);
 
     // set the correct flight mode
@@ -135,20 +139,15 @@ void Plane::init_ardupilot()
     reset_control_switch();
 
     // initialise sensor
-#if OPTFLOW == ENABLED
+#if AP_OPTICALFLOW_ENABLED
     if (optflow.enabled()) {
         optflow.init(-1);
     }
 #endif
 
 // init cargo gripper
-#if GRIPPER_ENABLED == ENABLED
+#if AP_GRIPPER_ENABLED
     g2.gripper.init();
-#endif
-
-    // init fence
-#if AC_FENCE == ENABLED
-    fence.init();
 #endif
 }
 
@@ -185,9 +184,9 @@ void Plane::startup_ground(void)
         );
 #endif
 
-#ifdef ENABLE_SCRIPTING
+#if AP_SCRIPTING_ENABLED
     g2.scripting.init();
-#endif // ENABLE_SCRIPTING
+#endif // AP_SCRIPTING_ENABLED
 
     // reset last heartbeat time, so we don't trigger failsafe on slow
     // startup
@@ -202,15 +201,57 @@ void Plane::startup_ground(void)
 
 bool Plane::set_mode(Mode &new_mode, const ModeReason reason)
 {
+
     if (control_mode == &new_mode) {
         // don't switch modes if we are already in the correct mode.
+        // only make happy noise if using a difent method to switch, this stops beeping for repeated change mode requests from GCS
+        if ((reason != control_mode_reason) && (reason != ModeReason::INITIALISED)) {
+            AP_Notify::events.user_mode_change = 1;
+        }
         return true;
+    }
+
+#if HAL_QUADPLANE_ENABLED
+    if (new_mode.is_vtol_mode() && !plane.quadplane.available()) {
+        // dont try and switch to a Q mode if quadplane is not enabled and initalized
+        gcs().send_text(MAV_SEVERITY_INFO,"Q_ENABLE 0");
+        // make sad noise
+        if (reason != ModeReason::INITIALISED) {
+            AP_Notify::events.user_mode_change_failed = 1;
+        }
+        return false;
     }
 
 #if !QAUTOTUNE_ENABLED
     if (&new_mode == &plane.mode_qautotune) {
         gcs().send_text(MAV_SEVERITY_INFO,"QAUTOTUNE disabled");
         set_mode(plane.mode_qhover, ModeReason::UNAVAILABLE);
+        // make sad noise
+        if (reason != ModeReason::INITIALISED) {
+            AP_Notify::events.user_mode_change_failed = 1;
+        }
+        return false;
+    }
+#endif  // !QAUTOTUNE_ENABLED
+
+#else
+    if (new_mode.is_vtol_mode()) {
+        INTERNAL_ERROR(AP_InternalError::error_t::flow_of_control);
+        gcs().send_text(MAV_SEVERITY_INFO,"HAL_QUADPLANE_ENABLED=0");
+        // make sad noise
+        if (reason != ModeReason::INITIALISED) {
+            AP_Notify::events.user_mode_change_failed = 1;
+        }
+        return false;
+    }
+#endif  // HAL_QUADPLANE_ENABLED
+
+#if AP_FENCE_ENABLED
+    // may not be allowed to change mode if recovering from fence breach
+    if (hal.util->get_soft_armed() && fence.enabled() && fence.option_enabled(AC_Fence::OPTIONS::DISABLE_MODE_CHANGE) &&
+                                            fence.get_breaches() && in_fence_recovery()) {
+        gcs().send_text(MAV_SEVERITY_NOTICE,"Mode change to %s denied, in fence recovery", new_mode.name());
+        AP_Notify::events.user_mode_change_failed = 1;
         return false;
     }
 #endif
@@ -223,7 +264,8 @@ bool Plane::set_mode(Mode &new_mode, const ModeReason reason)
     // TODO: move these to be after enter() once start_command_callback() no longer checks control_mode
     previous_mode = control_mode;
     control_mode = &new_mode;
-    const ModeReason previous_mode_reason = control_mode_reason;
+    const ModeReason  old_previous_mode_reason = previous_mode_reason;
+    previous_mode_reason = control_mode_reason;
     control_mode_reason = reason;
 
     // attempt to enter new mode
@@ -234,14 +276,12 @@ bool Plane::set_mode(Mode &new_mode, const ModeReason reason)
         // we failed entering new mode, roll back to old
         previous_mode = &old_previous_mode;
         control_mode = &old_mode;
-
         control_mode_reason = previous_mode_reason;
+        previous_mode_reason = old_previous_mode_reason;
 
-        // currently, only Q modes can fail enter(). This will likely change in the future and all modes
-        // should be changed to check dependencies and fail early before depending on changes in Mode::set_mode()
-        if (control_mode->is_vtol_mode()) {
-            // ignore result because if we fail we risk looping at the qautotune check above
-            control_mode->enter();
+        // make sad noise
+        if (reason != ModeReason::INITIALISED) {
+            AP_Notify::events.user_mode_change_failed = 1;
         }
         return false;
     }
@@ -254,33 +294,30 @@ bool Plane::set_mode(Mode &new_mode, const ModeReason reason)
     // exit previous mode
     old_mode.exit();
 
-    // record reasons
-    control_mode_reason = reason;
-
     // log and notify mode change
     logger.Write_Mode(control_mode->mode_number(), control_mode_reason);
     notify_mode(*control_mode);
     gcs().send_message(MSG_HEARTBEAT);
 
+    // make happy noise
+    if (reason != ModeReason::INITIALISED) {
+        AP_Notify::events.user_mode_change = 1;
+    }
     return true;
 }
 
 bool Plane::set_mode(const uint8_t new_mode, const ModeReason reason)
 {
     static_assert(sizeof(Mode::Number) == sizeof(new_mode), "The new mode can't be mapped to the vehicles mode number");
-    Mode *mode = plane.mode_from_mode_num(static_cast<Mode::Number>(new_mode));
-    if (mode == nullptr) {
-        gcs().send_text(MAV_SEVERITY_INFO, "Error: invalid mode number: %u", (unsigned)new_mode);
-        return false;
-    }
-    return set_mode(*mode, reason);
+
+    return set_mode_by_number(static_cast<Mode::Number>(new_mode), reason);
 }
 
 bool Plane::set_mode_by_number(const Mode::Number new_mode_number, const ModeReason reason)
 {
     Mode *new_mode = plane.mode_from_mode_num(new_mode_number);
     if (new_mode == nullptr) {
-        gcs().send_text(MAV_SEVERITY_INFO, "Error: invalid mode number: %d", new_mode_number);
+        notify_no_such_mode(new_mode_number);
         return false;
     }
     return set_mode(*new_mode, reason);
@@ -364,8 +401,8 @@ void Plane::startup_INS_ground(void)
 
     ahrs.init();
     ahrs.set_fly_forward(true);
-    ahrs.set_vehicle_class(AHRS_VEHICLE_FIXED_WING);
-    ahrs.set_wind_estimation(true);
+    ahrs.set_vehicle_class(AP_AHRS::VehicleClass::FIXED_WING);
+    ahrs.set_wind_estimation_enabled(true);
 
     ins.init(scheduler.get_loop_rate_hz());
     ahrs.reset();
@@ -374,14 +411,6 @@ void Plane::startup_INS_ground(void)
     //-----------------------------
     barometer.set_log_baro_bit(MASK_LOG_IMU);
     barometer.calibrate();
-
-    if (airspeed.enabled()) {
-        // initialize airspeed sensor
-        // --------------------------
-        airspeed.calibrate(true);
-    } else {
-        gcs().send_text(MAV_SEVERITY_WARNING,"No airspeed sensor present");
-    }
 }
 
 // sets notify object flight mode information
@@ -408,85 +437,14 @@ bool Plane::should_log(uint32_t mask)
  */
 int8_t Plane::throttle_percentage(void)
 {
-    if (quadplane.in_vtol_mode() && !quadplane.in_tailsitter_vtol_transition()) {
-        return quadplane.throttle_percentage();
+#if HAL_QUADPLANE_ENABLED
+    if (quadplane.in_vtol_mode() && !quadplane.tailsitter.in_vtol_transition()) {
+        return quadplane.motors->get_throttle_out() * 100.0;
     }
+#endif
     float throttle = SRV_Channels::get_output_scaled(SRV_Channel::k_throttle);
     if (!have_reverse_thrust()) {
         return constrain_int16(throttle, 0, 100);
     }
     return constrain_int16(throttle, -100, 100);
-}
-
-// update the harmonic notch filter center frequency dynamically
-void Plane::update_dynamic_notch()
-{
-    if (!ins.gyro_harmonic_notch_enabled()) {
-        return;
-    }
-    const float ref_freq = ins.get_gyro_harmonic_notch_center_freq_hz();
-    const float ref = ins.get_gyro_harmonic_notch_reference();
-
-    if (is_zero(ref)) {
-        ins.update_harmonic_notch_freq_hz(ref_freq);
-        return;
-    }
-
-    switch (ins.get_gyro_harmonic_notch_tracking_mode()) {
-        case HarmonicNotchDynamicMode::UpdateThrottle: // throttle based tracking
-            // set the harmonic notch filter frequency approximately scaled on motor rpm implied by throttle
-            if (quadplane.available()) {
-                ins.update_harmonic_notch_freq_hz(ref_freq * MAX(1.0f, sqrtf(quadplane.motors->get_throttle_out() / ref)));
-            }
-            break;
-
-        case HarmonicNotchDynamicMode::UpdateRPM: // rpm sensor based tracking
-            float rpm;
-            if (rpm_sensor.get_rpm(0, rpm)) {
-                // set the harmonic notch filter frequency from the main rotor rpm
-                ins.update_harmonic_notch_freq_hz(MAX(ref_freq, rpm * ref / 60.0f));
-            } else {
-                ins.update_harmonic_notch_freq_hz(ref_freq);
-            }
-            break;
-#if HAL_WITH_ESC_TELEM
-        case HarmonicNotchDynamicMode::UpdateBLHeli: // BLHeli based tracking
-            // set the harmonic notch filter frequency scaled on measured frequency
-            if (ins.has_harmonic_option(HarmonicNotchFilterParams::Options::DynamicHarmonic)) {
-                float notches[INS_MAX_NOTCHES];
-                const uint8_t num_notches = AP::esc_telem().get_motor_frequencies_hz(INS_MAX_NOTCHES, notches);
-
-                for (uint8_t i = 0; i < num_notches; i++) {
-                    notches[i] =  MAX(ref_freq, notches[i]);
-                }
-                if (num_notches > 0) {
-                    ins.update_harmonic_notch_frequencies_hz(num_notches, notches);
-                } else if (quadplane.available()) {    // throttle fallback
-                    ins.update_harmonic_notch_freq_hz(ref_freq * MAX(1.0f, sqrtf(quadplane.motors->get_throttle_out() / ref)));
-                } else {
-                    ins.update_harmonic_notch_freq_hz(ref_freq);
-                }
-            } else {
-                ins.update_harmonic_notch_freq_hz(MAX(ref_freq, AP::esc_telem().get_average_motor_frequency_hz() * ref));
-            }
-            break;
-#endif
-#if HAL_GYROFFT_ENABLED
-        case HarmonicNotchDynamicMode::UpdateGyroFFT: // FFT based tracking
-            // set the harmonic notch filter frequency scaled on measured frequency
-            if (ins.has_harmonic_option(HarmonicNotchFilterParams::Options::DynamicHarmonic)) {
-                float notches[INS_MAX_NOTCHES];
-                const uint8_t peaks = gyro_fft.get_weighted_noise_center_frequencies_hz(INS_MAX_NOTCHES, notches);
-
-                ins.update_harmonic_notch_frequencies_hz(peaks, notches);
-            } else {
-                ins.update_harmonic_notch_freq_hz(gyro_fft.get_weighted_noise_center_freq_hz());
-            }
-            break;
-#endif
-        case HarmonicNotchDynamicMode::Fixed: // static
-        default:
-            ins.update_harmonic_notch_freq_hz(ref_freq);
-            break;
-    }
 }

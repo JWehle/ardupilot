@@ -4,8 +4,7 @@
 #include <AP_Math/AP_Math.h>
 #include "AC_PID_2D.h"
 
-#define AC_PID_2D_FILT_HZ_DEFAULT  20.0f   // default input filter frequency
-#define AC_PID_2D_FILT_HZ_MIN      0.01f   // minimum input filter frequency
+#define AC_PID_2D_FILT_E_HZ_DEFAULT  20.0f   // default input filter frequency
 #define AC_PID_2D_FILT_D_HZ_DEFAULT  10.0f   // default input filter frequency
 #define AC_PID_2D_FILT_D_HZ_MIN      0.005f   // minimum input filter frequency
 
@@ -25,22 +24,22 @@ const AP_Param::GroupInfo AC_PID_2D::var_info[] = {
     // @Description: The maximum/minimum value that the I term can output
     AP_GROUPINFO("IMAX", 2, AC_PID_2D, _kimax, 0),
 
-    // @Param: FILT
+    // @Param: FLTE
     // @DisplayName: PID Input filter frequency in Hz
     // @Description: Input filter frequency in Hz
     // @Units: Hz
-    AP_GROUPINFO("FILT", 3, AC_PID_2D, _filt_E_hz, AC_PID_2D_FILT_HZ_DEFAULT),
+    AP_GROUPINFO("FLTE", 3, AC_PID_2D, _filt_E_hz, AC_PID_2D_FILT_E_HZ_DEFAULT),
 
     // @Param: D
     // @DisplayName: PID Derivative Gain
     // @Description: D Gain which produces an output that is proportional to the rate of change of the error
     AP_GROUPINFO("D",    4, AC_PID_2D, _kd, 0),
 
-    // @Param: D_FILT
+    // @Param: FLTD
     // @DisplayName: D term filter frequency in Hz
     // @Description: D term filter frequency in Hz
     // @Units: Hz
-    AP_GROUPINFO("D_FILT", 5, AC_PID_2D, _filt_D_hz, AC_PID_2D_FILT_D_HZ_DEFAULT),
+    AP_GROUPINFO("FLTD", 5, AC_PID_2D, _filt_D_hz, AC_PID_2D_FILT_D_HZ_DEFAULT),
 
     // @Param: FF
     // @DisplayName: PID Feed Forward Gain
@@ -57,13 +56,13 @@ AC_PID_2D::AC_PID_2D(float initial_kP, float initial_kI, float initial_kD, float
     // load parameter values from eeprom
     AP_Param::setup_object_defaults(this, var_info);
 
-    _kp = initial_kP;
-    _ki = initial_kI;
-    _kd = initial_kD;
-    _kff = initial_kFF;
-    _kimax = fabsf(initial_imax);
-    filt_E_hz(initial_filt_E_hz);
-    filt_D_hz(initial_filt_D_hz);
+    _kp.set_and_default(initial_kP);
+    _ki.set_and_default(initial_kI);
+    _kd.set_and_default(initial_kD);
+    _kff.set_and_default(initial_kFF);
+    _kimax.set_and_default(initial_imax);
+    _filt_E_hz.set_and_default(initial_filt_E_hz);
+    _filt_D_hz.set_and_default(initial_filt_D_hz);
 
     // reset input filter to first value received
     _reset_filter = true;
@@ -130,17 +129,18 @@ Vector2f AC_PID_2D::update_all(const Vector3f &target, const Vector3f &measureme
 //  If the limit is set the integral is only allowed to reduce in the direction of the limit
 void AC_PID_2D::update_i(const Vector2f &limit)
 {
-    Vector2f limit_direction = limit;
+    _pid_info_x.limit = false;
+    _pid_info_y.limit = false;
+
     Vector2f delta_integrator = (_error * _ki) * _dt;
-    if (!is_zero(limit_direction.length_squared())) {
-        // zero delta_vel if it will increase the velocity error
-        limit_direction.normalize();
-        if (is_positive(delta_integrator * limit)) {
-            delta_integrator.zero();
-        }
+    float integrator_length = _integrator.length();
+    _integrator += delta_integrator;
+    // do not let integrator increase in length if delta_integrator is in the direction of limit
+    if (is_positive(delta_integrator * limit) && _integrator.limit_length(integrator_length)) {
+        _pid_info_x.limit = true;
+        _pid_info_y.limit = true;
     }
 
-    _integrator += delta_integrator;
     _integrator.limit_length(_kimax);
 }
 
@@ -164,6 +164,13 @@ Vector2f AC_PID_2D::get_ff()
     _pid_info_x.FF = _target.x * _kff;
     _pid_info_y.FF = _target.y * _kff;
     return _target * _kff;
+}
+
+void AC_PID_2D::reset_I()
+{
+    _integrator.zero(); 
+    _pid_info_x.I = 0.0;
+    _pid_info_y.I = 0.0;
 }
 
 // save_gains - save gains to eeprom
@@ -203,9 +210,6 @@ void AC_PID_2D::set_integrator(const Vector2f& error, const Vector2f& i)
 void AC_PID_2D::set_integrator(const Vector2f& i)
 {
     _integrator = i;
-    const float integrator_length = _integrator.length();
-    if (integrator_length > _kimax) {
-        _integrator *= (_kimax / integrator_length);
-    }
+    _integrator.limit_length(_kimax);
 }
 
